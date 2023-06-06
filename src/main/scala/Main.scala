@@ -25,6 +25,15 @@ object Lyst:
     case el: Lyst   => Cons(Atom("quote"), el)
     case el: Atom   => Cons(Atom("quote"), Lyst(el))
     case el: Number => Cons(Atom("quote"), Lyst(el))
+object Pair:
+  def unapply(el: Expression) = el match
+    case Cons(hd, Cons(tl, Empty)) => Some(Lyst(hd, tl))
+    case _                         => None
+
+object Single:
+  def unapply(el: Expression) = el match
+    case Cons(el, Empty) => Some(el)
+    case _               => None
 
 object Read extends RegexParsers:
   // basic tokens
@@ -50,24 +59,63 @@ object Read extends RegexParsers:
     case Error(msg, next)      => Left(msg)
 
 object Eval:
+  trait Fn extends RegexParsers:
+    def atomParser: Parser[Expression => Either[String, Expression]]
+    def apply(atom: Atom)(expr: Expression) = parse(atomParser, atom.str) match
+      case Success(result, _) => result(expr)
+      case Failure(msg, _)    => Left(msg)
+      case Error(msg, _)      => Left(msg)
+
+  def fnPattern(pf: PartialFunction[Expression, Expression], msg: String)(
+      el: Expression
+  ) = el match
+    case pf(m) => Right(m)
+    case _     => Left(msg)
+
   def cons(el: Expression) = el match
-    case Cons(hd, tl) => Lyst(hd, tl)
+    case Pair(hd, tl) => Lyst(hd, tl)
     case el           => Lyst(el)
 
-  def car(el: Expression) = el match
-    case Cons(hd, _) => Right(hd)
-    case _           => Left("car requires a list")
-  def cdr(el: Expression) = el match
-    case Cons(_, tl) => Right(tl)
-    case _           => Left("cdr requires a list")
-  object Chain extends RegexParsers:
-    def a = "a".r ^^^ car
-    def d = "d".r ^^^ cdr
+  object ConsFn extends Fn:
+    override def atomParser = "cons".r ^^^ fnPattern(
+      { case Pair(hd, tl) => Lyst(hd, tl) },
+      "cons requires 2 elements"
+    )
+
+  object Chain extends Fn:
+    def msg(start: String) = start + " requires a list"
+    def a = "a".r ^^^ fnPattern({ case Pair(hd, _) => hd }, msg("car"))
+    def d = "d".r ^^^ fnPattern({ case Pair(_, tl) => tl }, msg("cdr"))
     def init(el: Expression): Either[String, Expression] = Right(el)
-    def parser = "c".r ~> (a | d).* <~ "r".r ^^ { l =>
-      l.foldRight(init)((next, curr) => curr(_).flatMap(next))
-    }
-    def apply(in: String) = parse(parser, in)
+    // convert c(a|d)*r chain into chain of car and cdr functions
+    override def atomParser = phrase("c".r ~> (a | d).* <~ "r".r ^^ {
+      _.foldRight(init) { (next, curr) => curr(_) flatMap (next) }
+    })
+
+  object AtomFn extends Fn:
+    override def atomParser = "atom".r ^^^ fnPattern(
+      {
+        case Single(Atom(_)) => Atom("t")
+        case Single(_)       => Empty
+      },
+      "atom requires a single argument"
+    )
+
+  object EqFn extends Fn:
+    override def atomParser = "eq".r ^^^ fnPattern(
+      {
+        case Pair(Atom(x), Atom(y)) if x == y => Atom("t")
+        case Pair(_, _)                       => Empty
+      },
+      "compare requires exactly 2 params"
+    )
+
+  object CondFn extends Fn:
+    def cond(expr: Expression): Either[String, Expression] = expr match
+      case Cons(Cons(hd, hdtl), tl) =>
+        if (Eval(Right(hd)) == Right(Atom("t"))) Right(hdtl) else cond(tl)
+      case _ => Right(Empty)
+    def atomParser = "cond".r ^^^ cond
 
   def apply[E](res: Either[E, Expression]) = res map { ??? }
 
