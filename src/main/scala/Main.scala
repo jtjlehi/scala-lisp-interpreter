@@ -70,57 +70,6 @@ object Read extends RegexParsers:
 
 object Eval:
   type ExprRes = Either[String, Expression]
-  trait Fn extends RegexParsers:
-    def atomParser: Parser[Expression => ExprRes]
-    def apply(atom: Atom)(expr: Expression) = parse(atomParser, atom.str) match
-      case Success(result, _) => result(expr)
-      case Failure(msg, _)    => Left(msg)
-      case Error(msg, _)      => Left(msg)
-
-  def fnPattern(pf: PartialFunction[Expression, Expression], msg: String)(
-      el: Expression
-  ) = el match
-    case pf(m) => Right(m)
-    case _     => Left(msg)
-
-  def cons(el: Expression) =
-    el match
-      case Pair(hd, tl) => Lyst(hd, tl)
-      case el           => Lyst(el)
-
-  object ConsFn extends Fn:
-    override def atomParser = "cons".r ^^^ fnPattern(
-      { case Pair(hd, tl) => Lyst(hd, tl) },
-      "cons requires 2 elements"
-    )
-
-  object Chain extends Fn:
-    def msg(start: String) = start + " requires a list"
-    def a = "a".r ^^^ fnPattern({ case Pair(hd, _) => hd }, msg("car"))
-    def d = "d".r ^^^ fnPattern({ case Pair(_, tl) => tl }, msg("cdr"))
-    def init(el: Expression): ExprRes = Right(el)
-    // convert c(a|d)*r chain into chain of car and cdr functions
-    override def atomParser = phrase("c".r ~> (a | d).* <~ "r".r ^^ {
-      _.foldRight(init) { (next, curr) => curr(_) flatMap (next) }
-    })
-
-  object AtomFn extends Fn:
-    override def atomParser = "atom".r ^^^ fnPattern(
-      {
-        case Single(Atom(_)) => Atom("t")
-        case Single(_)       => Empty
-      },
-      "atom requires a single argument"
-    )
-
-  object EqFn extends Fn:
-    override def atomParser = "eq".r ^^^ fnPattern(
-      {
-        case Pair(Atom(x), Atom(y)) if x == y => Atom("t")
-        case Pair(_, _)                       => Empty
-      },
-      "compare requires exactly 2 params"
-    )
 
   def assoc(a: Lyst, x: String): ExprRes = a match
     case sublist(Atom(k), v, _) if k == x => Right(v)
@@ -185,11 +134,6 @@ object Eval:
       yield Lyst(hd, tl)
     }
     def default = ".*".r ^^ { str => (tl: Expression, a: Lyst) =>
-      val x = Atom(str)
-      def assoc(y: Lyst): Either[String, Lyst] = y match
-        case Cons(Cons(hdhd, hdtl), tl) =>
-          if (hdhd == x) Right(hdtl) else assoc(y)
-        case _ => Left("assoc list is invalid")
       def evlis(m: Expression): Either[String, Lyst] = m match
         case Empty => Right(Empty)
         case Cons(hd, tl) =>
@@ -199,7 +143,7 @@ object Eval:
           yield Cons(hd, tl)
         case _ => Left("invald params")
       for
-        hd <- assoc(a)
+        hd <- assoc(a, str)
         tl <- evlis(tl)
         res <- Eval(Cons(Cons(hd, tl), a))
       yield res
